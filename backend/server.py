@@ -27,7 +27,7 @@ from authenticator import FaceAuthenticator
 from kasa_agent import KasaAgent
 
 # Create a Socket.IO server
-sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
+sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*', ping_timeout=60, ping_interval=25)
 app = FastAPI()
 app_socketio = socketio.ASGIApp(sio, app)
 
