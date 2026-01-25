@@ -100,11 +100,14 @@ app.whenReady().then(() => {
         if (mainWindow) mainWindow.close();
     });
 
-    checkBackendPort(8000).then((isTaken) => {
-        if (isTaken) {
-            console.log('Port 8000 is taken. Assuming backend is already running manually.');
+    // Check if backend is already running by trying to connect to it
+    // We skip the port binding check because it can be unreliable on some Windows setups (IPv4 vs IPv6)
+    checkBackendHealth(8001).then((isRunning) => {
+        if (isRunning) {
+            console.log('Backend is already running on port 8001.');
             waitForBackend().then(createWindow);
         } else {
+            console.log('Backend not detected. Starting Python process...');
             startPythonBackend();
             // Give it a moment to start, then wait for health check
             setTimeout(() => {
@@ -118,22 +121,25 @@ app.whenReady().then(() => {
     });
 });
 
-function checkBackendPort(port) {
+function checkBackendHealth(port) {
     return new Promise((resolve) => {
-        const net = require('net');
-        const server = net.createServer();
-        server.once('error', (err) => {
-            if (err.code === 'EADDRINUSE') {
+        const http = require('http');
+        const req = http.get(`http://127.0.0.1:${port}/status`, (res) => {
+            if (res.statusCode === 200) {
                 resolve(true);
             } else {
                 resolve(false);
             }
         });
-        server.once('listening', () => {
-            server.close();
+
+        req.on('error', () => {
             resolve(false);
         });
-        server.listen(port);
+
+        req.setTimeout(1000, () => {
+            req.abort();
+            resolve(false);
+        });
     });
 }
 
@@ -141,7 +147,7 @@ function waitForBackend() {
     return new Promise((resolve) => {
         const check = () => {
             const http = require('http');
-            http.get('http://127.0.0.1:8000/status', (res) => {
+            http.get('http://127.0.0.1:8001/status', (res) => {
                 if (res.statusCode === 200) {
                     console.log('Backend is ready!');
                     resolve();
