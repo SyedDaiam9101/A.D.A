@@ -18,7 +18,7 @@ import SettingsWindow from './components/SettingsWindow';
 
 
 
-const socket = io('http://localhost:8000');
+const socket = io('http://localhost:8001');
 const { ipcRenderer } = window.require('electron');
 
 function App() {
@@ -752,16 +752,9 @@ function App() {
         }
     };
 
-    const predictWebcam = async () => {
+    const predictWebcam = () => {
         // Use ref for checking state to avoid closure staleness
         if (!videoRef.current || !canvasRef.current || !isVideoOnRef.current) {
-            return;
-        }
-
-        // Throttle: process every 2nd frame (skip odd frames) for UI performance
-        if (frameCountRef.current % 2 !== 0) {
-            frameCountRef.current++;
-            if (isVideoOnRef.current) requestAnimationFrame(predictWebcam);
             return;
         }
 
@@ -785,8 +778,8 @@ function App() {
         // 2. Send Frame to Backend (Throttled & Resized)
         // Only send if connected
         if (isConnected) {
-            // Simple throttle: every 10th frame roughly
-            if (frameCountRef.current % 10 === 0) {
+            // Simple throttle: every 5th frame roughly
+            if (frameCountRef.current % 5 === 0) {
 
                 // Use dedicated transmission canvas for resizing
                 const transCanvas = transmissionCanvasRef.current;
@@ -1036,7 +1029,6 @@ function App() {
         }
 
         if (isVideoOnRef.current) {
-            // Throttle prediction loop to ~30 FPS if computer is slow
             requestAnimationFrame(predictWebcam);
         }
     };
