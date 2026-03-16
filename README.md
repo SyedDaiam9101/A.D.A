@@ -126,7 +126,7 @@ If you have never coded before, follow these steps first!
 1. Open your terminal (or Command Prompt on Windows).
 2. Type this command and hit Enter:
    ```bash
-   git clone https://github.com/daiam/ada_v2.git
+   git clone https://github.com/SyedDaiam9101/A.D.A.git
    ```
 3. This creates a folder named `ada_v2`.
 
