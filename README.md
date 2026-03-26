@@ -8,7 +8,7 @@
 
 > **A.D.A** = **A**dvanced **D**esign **A**ssistant
 
-ADA V2 is a sophisticated AI assistant designed for multimodal interaction. It combines Google's Gemini 2.5 Native Audio with computer vision, gesture control, and 3D CAD generation in a Electron desktop application.
+ADA V2 is a sophisticated AI assistant designed for multimodal interaction. It combines real-time voice, computer vision, gesture control, and 3D CAD generation in an Electron desktop application. The backend now uses a pluggable AI provider layer, so you can run the default Gemini stack or point A.D.A. at any OpenAI-compatible endpoint.
 
 ---
 
@@ -52,7 +52,8 @@ graph TB
     
     subgraph Backend ["Backend (Python 3.11 + FastAPI)"]
         SERVER[server.py<br/>Socket.IO Server]
-        ADA[ada.py<br/>Gemini Live API]
+        PROVIDERS[providers/<br/>Gemini + OpenAI-compatible]
+        ADA[ada.py<br/>Live Session Loop]
         WEB[web_agent.py<br/>Playwright Browser]
         CAD[cad_agent.py<br/>CAD + build123d]
         PRINTER[printer_agent.py<br/>3D Printing + OrcaSlicer]
@@ -64,6 +65,9 @@ graph TB
     UI --> SOCKET_C
     SOCKET_C <--> SERVER
     SERVER --> ADA
+    ADA --> PROVIDERS
+    CAD --> PROVIDERS
+    WEB --> PROVIDERS
     ADA --> WEB
     ADA --> CAD
     ADA --> KASA
@@ -95,7 +99,10 @@ playwright install chromium
 npm install
 
 # 4. Create .env file
-echo "GEMINI_API_KEY=your_key_here" > .env
+cat > .env <<'EOF'
+AI_PROVIDER=gemini
+GEMINI_API_KEY=your_key_here
+EOF
 
 # 5. Run!
 conda activate ada_v2 && npm run dev
@@ -223,20 +230,49 @@ ADA uses **OrcaSlicer** (recommended) or PrusaSlicer to generate G-code.
 
 ---
 
-### 6. 🔑 Gemini API Key Setup
-ADA uses Google's Gemini API for voice and intelligence. You need a free API key.
+### 6. 🔑 AI Provider Setup
+ADA reads provider configuration from `.env`.
 
+**Gemini (default)**
 1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey).
-2. Sign in with your Google account.
-3. Click **"Create API Key"** and copy the generated key.
-4. Create a file named `.env` in the `ada_v2` folder (same level as `README.md`).
-5. Add this line to the file:
+2. Create an API key.
+3. Create a file named `.env` in the `ada_v2` folder.
+4. Add:
    ```
+   AI_PROVIDER=gemini
    GEMINI_API_KEY=your_api_key_here
    ```
-6. Replace `your_api_key_here` with the key you copied.
 
-> **Note**: Keep this key private! Never commit your `.env` file to Git.
+**OpenAI-compatible providers**
+- Supported through the OpenAI API format, including OpenAI, Ollama, and LocalAI.
+- Set `AI_PROVIDER=openai`.
+- Point `OPENAI_BASE_URL` at your provider's `/v1` endpoint.
+- Set `CAD_MODEL` and `LIVE_MODEL` to model IDs that exist on that provider.
+
+Example:
+```
+AI_PROVIDER=openai
+OPENAI_API_KEY=your_api_key_here
+OPENAI_BASE_URL=https://api.openai.com/v1
+CAD_MODEL=gpt-4o-mini
+LIVE_MODEL=gpt-4o-realtime-preview
+```
+
+> **Note**: Keep `.env` private and never commit it to Git.
+
+### 7. AI Provider Configuration
+
+| Variable | Description |
+| :--- | :--- |
+| `AI_PROVIDER` | `gemini` or `openai` |
+| `GEMINI_API_KEY` | Used when `AI_PROVIDER=gemini` |
+| `OPENAI_API_KEY` | Used when `AI_PROVIDER=openai` |
+| `OPENAI_BASE_URL` | Optional override for OpenAI-compatible endpoints |
+| `LIVE_MODEL` | Live session model ID for the selected provider |
+| `CAD_MODEL` | CAD agent model override |
+| `WEB_MODEL` | Browser agent model override |
+
+`web_agent.py` currently relies on Gemini Computer Use. CAD generation and the live session factory work across Gemini and OpenAI-compatible backends; browser automation should stay on Gemini for now.
 
 ---
 
@@ -347,7 +383,7 @@ This is a server-side issue from the Gemini API. Simply reconnect by clicking th
 ```
 ada_v2/
 ├── backend/                    # Python server & AI logic
-│   ├── ada.py                  # Gemini Live API integration
+│   ├── ada.py                  # Live audio/session orchestration
 │   ├── server.py               # FastAPI + Socket.IO server
 │   ├── cad_agent.py            # CAD generation orchestrator
 │   ├── printer_agent.py        # 3D printer discovery & slicing
@@ -355,7 +391,8 @@ ada_v2/
 │   ├── kasa_agent.py           # TP-Link smart home control
 │   ├── authenticator.py        # MediaPipe face auth logic
 │   ├── project_manager.py      # Project context management
-│   ├── tools.py                # Tool definitions for Gemini
+│   ├── tools.py                # Tool definitions shared with providers
+│   ├── providers/              # Pluggable AI backend implementations
 │   └── reference.jpg           # Your face photo (add this!)
 ├── src/                        # React frontend
 │   ├── App.jsx                 # Main application component
@@ -364,7 +401,7 @@ ada_v2/
 ├── electron/                   # Electron main process
 │   └── main.js                 # Window & IPC setup
 ├── projects/                   # User project data (auto-created)
-├── .env                        # API keys (create this!)
+├── .env                        # Provider config and API keys
 ├── requirements.txt            # Python dependencies
 ├── package.json                # Node.js dependencies
 └── README.md                   # You are here!

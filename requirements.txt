@@ -4,6 +4,8 @@ python-socketio
 python-multipart
 # Google GenAI SDK (v1beta)
 google-genai
+# OpenAI-compatible providers
+openai>=1.0.0
 # Computer Vision & Audio
 opencv-python
 pyaudio

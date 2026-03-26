@@ -1,28 +1,24 @@
 import os
-import time
 import asyncio
 import base64
+
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright
-from google import genai
-from google.genai import types
+
+from providers import get_text_provider
 
 # 1. Load API Key
 load_dotenv()
-API_KEY = os.getenv("GEMINI_API_KEY")
-
-if not API_KEY:
-    raise ValueError("Please set GEMINI_API_KEY in your .env file")
 
 # 2. Configuration
 SCREEN_WIDTH = 1440
 SCREEN_HEIGHT = 900
-# UPDATED: Use the specific Computer Use preview model
-MODEL_ID = "gemini-2.5-computer-use-preview-10-2025"
+# UPDATED: Use model from env, fallback to Gemini Computer Use preview
+MODEL_ID = os.getenv("WEB_MODEL", "gemini-2.5-computer-use-preview-10-2025")
 
 class WebAgent:
     def __init__(self):
-        self.client = genai.Client(api_key=API_KEY)
+        self.provider = get_text_provider()
         self.browser = None
         self.context = None
         self.page = None
@@ -158,6 +154,9 @@ class WebAgent:
         screenshot_bytes = await self.page.screenshot(type="png") 
         current_url = self.page.url
         
+        # Lazy import — Computer Use function responses use Gemini SDK types
+        from google.genai import types
+
         function_responses = []
         for call_id, name, result in results:
             response_data = {"url": current_url}
@@ -183,6 +182,19 @@ class WebAgent:
             )
         return function_responses, screenshot_bytes
 
+    def _supports_computer_use(self) -> bool:
+        from providers.gemini_provider import GeminiTextProvider
+
+        return isinstance(self.provider, GeminiTextProvider)
+
+    async def _generate_with_provider(self, chat_history, config):
+        """Computer Use currently requires Gemini's native SDK types."""
+        return await self.provider.client.aio.models.generate_content(
+            model=MODEL_ID,
+            contents=chat_history,
+            config=config,
+        )
+
     async def run_task(self, prompt, update_callback=None):
         """
         Runs the agent with the given prompt.
@@ -191,6 +203,18 @@ class WebAgent:
         """
         print(f"[START] WebAgent started. Goal: {prompt}")
         final_response = "Agent finished without a final summary."
+
+        if not self._supports_computer_use():
+            message = (
+                "The current WebAgent implementation requires the Gemini provider. "
+                "Switch `AI_PROVIDER=gemini` before using browser automation."
+            )
+            if update_callback:
+                await update_callback(None, message)
+            return message
+
+        # Lazy import — Computer Use config uses Gemini SDK types
+        from google.genai import types
 
         async with async_playwright() as p:
             # Launch browser (Headless=True usually, but for dev we might keep it hidden)
@@ -239,10 +263,8 @@ class WebAgent:
                 print(f"\n--- Turn {turn + 1} ---")
                 
                 try:
-                    response = await self.client.aio.models.generate_content(
-                        model=MODEL_ID,
-                        contents=chat_history,
-                        config=config
+                    response = await self._generate_with_provider(
+                        chat_history, config
                     )
                 except Exception as e:
                     print(f"[CRITICAL] Critical API Error: {e}")

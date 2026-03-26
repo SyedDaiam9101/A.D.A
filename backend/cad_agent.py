@@ -1,20 +1,20 @@
 import os
-import json
 import asyncio
 from datetime import datetime
-from google import genai
-from google.genai import types
+from typing import Optional
+
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
-from typing import List, Optional
+
+from providers import get_text_provider
+from providers.base import ContentConfig
 
 load_dotenv()
 
 class CadAgent:
     def __init__(self, on_thought=None, on_status=None):
-        self.client = genai.Client(http_options={"api_version": "v1beta"}, api_key=os.getenv("GEMINI_API_KEY"))
+        self.provider = get_text_provider()
         # Using Gemini 2.5 Pro for thinking/streaming support
-        self.model = "gemini-3-pro-preview"
+        self.model = os.getenv("CAD_MODEL", "gemini-3-pro-preview")
         self.on_thought = on_thought  # Callback for streaming thoughts 
         self.on_status = on_status  # Callback for retry status info
         
@@ -62,7 +62,8 @@ export_stl(result_part, 'output.stl')
 
     async def generate_prototype(self, prompt: str, output_dir: Optional[str] = None):
         """
-        Generates 3D geometry by asking Gemini for a script, then running it LOCALLY.
+        Generates 3D geometry by asking the configured provider for a script,
+        then running it locally.
         Args:
             prompt: User's description of the model to generate.
             output_dir: Directory to save the script and STL. If None, uses temp dir.
@@ -99,29 +100,27 @@ export_stl(result_part, 'output.stl')
                     }
                     self.on_status(status_info)
                 
-                # 1. Ask Gemini for the code with streaming and thinking
+                # 1. Ask model for the code with streaming and thinking
                 raw_content = ""
-                stream = await self.client.aio.models.generate_content_stream(
-                    model=self.model,
-                    contents=current_prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction=self.system_instruction,
-                        temperature=1.0,
-                        thinking_config=types.ThinkingConfig(include_thoughts=True)
-                    )
+                gen_config = ContentConfig(
+                    system_instruction=self.system_instruction,
+                    temperature=1.0,
+                    include_thinking=True,
                 )
-                async for chunk in stream:
-                    if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
-                        for part in chunk.candidates[0].content.parts:
-                            if not part.text:
-                                continue
-                            elif part.thought:
-                                # Stream thought to callback
-                                if self.on_thought:
-                                    self.on_thought(part.text)
-                            else:
-                                # Accumulate answer text
-                                raw_content += part.text
+                async for chunk in self.provider.generate_content_stream(
+                    contents=current_prompt,
+                    model=self.model,
+                    config=gen_config,
+                ):
+                    if not chunk.text:
+                        continue
+                    if chunk.is_thought:
+                        # Stream thought to callback
+                        if self.on_thought:
+                            self.on_thought(chunk.text)
+                    else:
+                        # Accumulate answer text
+                        raw_content += chunk.text
                 
                 if not raw_content:
                     print("[CadAgent DEBUG] [ERR] Empty response from model.")
@@ -315,29 +314,27 @@ Ensure you still export to 'output.stl'.
                     }
                     self.on_status(status_info)
                 
-                # 1. Ask Gemini for the code with streaming and thinking
+                # 1. Ask model for the code with streaming and thinking
                 raw_content = ""
-                stream = await self.client.aio.models.generate_content_stream(
-                    model=self.model,
-                    contents=current_prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction=self.system_instruction,
-                        temperature=1.0,
-                        thinking_config=types.ThinkingConfig(include_thoughts=True)
-                    )
+                gen_config = ContentConfig(
+                    system_instruction=self.system_instruction,
+                    temperature=1.0,
+                    include_thinking=True,
                 )
-                async for chunk in stream:
-                    if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
-                        for part in chunk.candidates[0].content.parts:
-                            if not part.text:
-                                continue
-                            elif part.thought:
-                                # Stream thought to callback
-                                if self.on_thought:
-                                    self.on_thought(part.text)
-                            else:
-                                # Accumulate answer text
-                                raw_content += part.text
+                async for chunk in self.provider.generate_content_stream(
+                    contents=current_prompt,
+                    model=self.model,
+                    config=gen_config,
+                ):
+                    if not chunk.text:
+                        continue
+                    if chunk.is_thought:
+                        # Stream thought to callback
+                        if self.on_thought:
+                            self.on_thought(chunk.text)
+                    else:
+                        # Accumulate answer text
+                        raw_content += chunk.text
                 
                 if not raw_content:
                     print("[CadAgent DEBUG] [ERR] Empty response from model.")
