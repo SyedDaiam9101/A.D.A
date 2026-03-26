@@ -4,6 +4,7 @@ import io
 import os
 import sys
 import traceback
+
 from dotenv import load_dotenv
 import cv2
 import pyaudio
@@ -14,15 +15,14 @@ import math
 import struct
 import time
 
-from google import genai
-from google.genai import types
-
 if sys.version_info < (3, 11, 0):
     import taskgroup, exceptiongroup
     asyncio.TaskGroup = taskgroup.TaskGroup
     asyncio.ExceptionGroup = exceptiongroup.ExceptionGroup
 
 from tools import tools_list
+from providers import get_live_provider
+from providers.base import LiveConfig, FunctionResponseData
 
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
@@ -30,11 +30,10 @@ SEND_SAMPLE_RATE = 16000
 RECEIVE_SAMPLE_RATE = 24000
 CHUNK_SIZE = 1024
 
-MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025"
-DEFAULT_MODE = "camera"
-
 load_dotenv()
-client = genai.Client(http_options={"api_version": "v1beta"}, api_key=os.getenv("GEMINI_API_KEY"))
+
+MODEL = os.getenv("LIVE_MODEL", "models/gemini-2.5-flash-native-audio-preview-12-2025")
+DEFAULT_MODE = "camera"
 
 # Function definitions
 generate_cad = {
@@ -183,25 +182,25 @@ iterate_cad_tool = {
 tools = [{'google_search': {}}, {"function_declarations": [generate_cad, run_web_agent, create_project_tool, switch_project_tool, list_projects_tool, list_smart_devices_tool, control_light_tool, discover_printers_tool, print_stl_tool, get_print_status_tool, iterate_cad_tool] + tools_list[0]['function_declarations'][1:]}]
 
 # --- CONFIG UPDATE: Enabled Transcription ---
-config = types.LiveConnectConfig(
-    response_modalities=["AUDIO"],
-    # We switch these from [] to {} to enable them with default settings
-    output_audio_transcription={}, 
-    input_audio_transcription={},
-    system_instruction="Your name is Ada, which stands for Advanced Design Assistant. "
-        "You have a witty and charming personality. "
-        "Your creator is Daiam, and you address him as 'Sir'. "
-        "When answering, respond using complete and concise sentences to keep a quick pacing and keep the conversation flowing. "
-        "You have a fun personality.",
-    tools=tools,
-    speech_config=types.SpeechConfig(
-        voice_config=types.VoiceConfig(
-            prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                voice_name="Kore"
-            )
-        )
-    )
+SYSTEM_INSTRUCTION = (
+    "Your name is Ada, which stands for Advanced Design Assistant. "
+    "You have a witty and charming personality. "
+    "Your creator is Daiam, and you address him as 'Sir'. "
+    "When answering, respond using complete and concise sentences to keep a quick pacing and keep the conversation flowing. "
+    "You have a fun personality."
 )
+
+live_config = LiveConfig(
+    response_modalities=["AUDIO"],
+    system_instruction=SYSTEM_INSTRUCTION,
+    tools=tools,
+    voice_name="Kore",
+    enable_input_transcription=True,
+    enable_output_transcription=True,
+)
+
+# Backward-compatible alias used by existing tests/imports.
+config = live_config
 
 pya = pyaudio.PyAudio()
 
@@ -243,6 +242,7 @@ class AudioLoop:
         self.paused = False
 
         self.session = None
+        self.live_provider = get_live_provider()
         
         # Create CadAgent with thought callback
         def handle_cad_thought(thought_text):
@@ -644,138 +644,123 @@ class AudioLoop:
                 turn = self.session.receive()
                 async for response in turn:
                     # 1. Handle Audio Data
-                    if data := response.data:
-                        self.audio_in_queue.put_nowait(data)
+                    if response.audio_data:
+                        self.audio_in_queue.put_nowait(response.audio_data)
                         # NOTE: 'continue' removed here to allow processing transcription/tools in same packet
 
                     # 2. Handle Transcription (User & Model)
-                    if response.server_content:
-                        if response.server_content.input_transcription:
-                            transcript = response.server_content.input_transcription.text
-                            if transcript:
-                                # Skip if this is an exact duplicate event
-                                if transcript != self._last_input_transcription:
-                                    # Calculate delta (Gemini may send cumulative or chunk-based text)
-                                    delta = transcript
-                                    if transcript.startswith(self._last_input_transcription):
-                                        delta = transcript[len(self._last_input_transcription):]
-                                    self._last_input_transcription = transcript
-                                    
-                                    # Only send if there's new text
-                                    if delta:
-                                        # User is speaking, so interrupt model playback!
-                                        self.clear_audio_queue()
+                    if response.input_transcription:
+                        transcript = response.input_transcription.text
+                        if transcript:
+                            # Skip if this is an exact duplicate event
+                            if transcript != self._last_input_transcription:
+                                # Calculate delta (may send cumulative or chunk-based text)
+                                delta = transcript
+                                if transcript.startswith(self._last_input_transcription):
+                                    delta = transcript[len(self._last_input_transcription):]
+                                self._last_input_transcription = transcript
+                                
+                                # Only send if there's new text
+                                if delta:
+                                    # User is speaking, so interrupt model playback!
+                                    self.clear_audio_queue()
 
-                                        # Send to frontend (Streaming)
-                                        if self.on_transcription:
-                                             self.on_transcription({"sender": "User", "text": delta})
-                                        
-                                        # Buffer for Logging
-                                        if self.chat_buffer["sender"] != "User":
-                                            # Flush previous if exists
-                                            if self.chat_buffer["sender"] and self.chat_buffer["text"].strip():
-                                                self.project_manager.log_chat(self.chat_buffer["sender"], self.chat_buffer["text"])
-                                            # Start new
-                                            self.chat_buffer = {"sender": "User", "text": delta}
-                                        else:
-                                            # Append
-                                            self.chat_buffer["text"] += delta
-                        
-                        if response.server_content.output_transcription:
-                            transcript = response.server_content.output_transcription.text
-                            if transcript:
-                                # Skip if this is an exact duplicate event
-                                if transcript != self._last_output_transcription:
-                                    # Calculate delta (Gemini may send cumulative or chunk-based text)
-                                    delta = transcript
-                                    if transcript.startswith(self._last_output_transcription):
-                                        delta = transcript[len(self._last_output_transcription):]
-                                    self._last_output_transcription = transcript
+                                    # Send to frontend (Streaming)
+                                    if self.on_transcription:
+                                         self.on_transcription({"sender": "User", "text": delta})
                                     
-                                    # Only send if there's new text
-                                    if delta:
-                                        # Send to frontend (Streaming)
-                                        if self.on_transcription:
-                                             self.on_transcription({"sender": "ADA", "text": delta})
-                                        
-                                        # Buffer for Logging
-                                        if self.chat_buffer["sender"] != "ADA":
-                                            # Flush previous
-                                            if self.chat_buffer["sender"] and self.chat_buffer["text"].strip():
-                                                self.project_manager.log_chat(self.chat_buffer["sender"], self.chat_buffer["text"])
-                                            # Start new
-                                            self.chat_buffer = {"sender": "ADA", "text": delta}
-                                        else:
-                                            # Append
-                                            self.chat_buffer["text"] += delta
-                        
-                        # Flush buffer on turn completion if needed, 
-                        # but usually better to wait for sender switch or explicit end.
-                        # We can also check turn_complete signal if available in response.server_content.model_turn etc
+                                    # Buffer for Logging
+                                    if self.chat_buffer["sender"] != "User":
+                                        # Flush previous if exists
+                                        if self.chat_buffer["sender"] and self.chat_buffer["text"].strip():
+                                            self.project_manager.log_chat(self.chat_buffer["sender"], self.chat_buffer["text"])
+                                        # Start new
+                                        self.chat_buffer = {"sender": "User", "text": delta}
+                                    else:
+                                        # Append
+                                        self.chat_buffer["text"] += delta
+                    
+                    if response.output_transcription:
+                        transcript = response.output_transcription.text
+                        if transcript:
+                            # Skip if this is an exact duplicate event
+                            if transcript != self._last_output_transcription:
+                                # Calculate delta (may send cumulative or chunk-based text)
+                                delta = transcript
+                                if transcript.startswith(self._last_output_transcription):
+                                    delta = transcript[len(self._last_output_transcription):]
+                                self._last_output_transcription = transcript
+                                
+                                # Only send if there's new text
+                                if delta:
+                                    # Send to frontend (Streaming)
+                                    if self.on_transcription:
+                                         self.on_transcription({"sender": "ADA", "text": delta})
+                                    
+                                    # Buffer for Logging
+                                    if self.chat_buffer["sender"] != "ADA":
+                                        # Flush previous
+                                        if self.chat_buffer["sender"] and self.chat_buffer["text"].strip():
+                                            self.project_manager.log_chat(self.chat_buffer["sender"], self.chat_buffer["text"])
+                                        # Start new
+                                        self.chat_buffer = {"sender": "ADA", "text": delta}
+                                    else:
+                                        # Append
+                                        self.chat_buffer["text"] += delta
+                    
+                    # Flush buffer on turn completion if needed, 
+                    # but usually better to wait for sender switch or explicit end.
 
                     # 3. Handle Tool Calls
-                    if response.tool_call:
+                    if response.tool_calls:
                         print("The tool was called")
                         function_responses = []
-                        for fc in response.tool_call.function_calls:
+                        for fc in response.tool_calls:
                             if fc.name in ["generate_cad", "run_web_agent", "write_file", "read_directory", "read_file", "create_project", "switch_project", "list_projects", "list_smart_devices", "control_light", "discover_printers", "print_stl", "get_print_status", "iterate_cad"]:
                                 prompt = fc.args.get("prompt", "") # Prompt is not present for all tools
                                 
                                 # Check Permissions (Default to True if not set)
                                 confirmation_required = self.permissions.get(fc.name, True)
-                                
+
+                                confirmed = True
                                 if not confirmation_required:
                                     print(f"[ADA DEBUG] [TOOL] Permission check: '{fc.name}' -> AUTO-ALLOW")
-                                    # Skip confirmation block and jump to execution
-                                    pass
+                                elif not self.on_tool_confirmation:
+                                    print(f"[ADA DEBUG] [TOOL] No confirmation callback for '{fc.name}'. AUTO-ALLOW")
                                 else:
-                                    # Confirmation Logic
-                                    if self.on_tool_confirmation:
-                                        import uuid
-                                        request_id = str(uuid.uuid4())
+                                    import uuid
+
+                                    request_id = str(uuid.uuid4())
                                     print(f"[ADA DEBUG] [STOP] Requesting confirmation for '{fc.name}' (ID: {request_id})")
-                                    
+
                                     future = asyncio.Future()
                                     self._pending_confirmations[request_id] = future
-                                    
-                                    self.on_tool_confirmation({
-                                        "id": request_id, 
-                                        "tool": fc.name, 
-                                        "args": fc.args
-                                    })
-                                    
-                                    try:
-                                        # Wait for user response
-                                        confirmed = await future
 
+                                    self.on_tool_confirmation({
+                                        "id": request_id,
+                                        "tool": fc.name,
+                                        "args": fc.args,
+                                    })
+
+                                    try:
+                                        confirmed = await future
                                     finally:
                                         self._pending_confirmations.pop(request_id, None)
 
                                     print(f"[ADA DEBUG] [CONFIRM] Request {request_id} resolved. Confirmed: {confirmed}")
 
-                                    if not confirmed:
-                                        print(f"[ADA DEBUG] [DENY] Tool call '{fc.name}' denied by user.")
-                                        function_response = types.FunctionResponse(
+                                if not confirmed:
+                                    print(f"[ADA DEBUG] [DENY] Tool call '{fc.name}' denied by user.")
+                                    function_responses.append(
+                                        FunctionResponseData(
                                             id=fc.id,
                                             name=fc.name,
                                             response={
                                                 "result": "User denied the request to use this tool.",
-                                            }
+                                            },
                                         )
-                                        function_responses.append(function_response)
-                                        continue
-
-                                    if not confirmed:
-                                        print(f"[ADA DEBUG] [DENY] Tool call '{fc.name}' denied by user.")
-                                        function_response = types.FunctionResponse(
-                                            id=fc.id,
-                                            name=fc.name,
-                                            response={
-                                                "result": "User denied the request to use this tool.",
-                                            }
-                                        )
-                                        function_responses.append(function_response)
-                                        continue
+                                    )
+                                    continue
 
                                 # If confirmed (or no callback configured, or auto-allowed), proceed
                                 if fc.name == "generate_cad":
@@ -791,7 +776,7 @@ class AudioLoop:
                                     asyncio.create_task(self.handle_web_agent_request(prompt))
                                     
                                     result_text = "Web Navigation started. Do not reply to this message."
-                                    function_response = types.FunctionResponse(
+                                    function_response = FunctionResponseData(
                                         id=fc.id,
                                         name=fc.name,
                                         response={
@@ -808,7 +793,7 @@ class AudioLoop:
                                     content = fc.args["content"]
                                     print(f"[ADA DEBUG] [TOOL] Tool Call: 'write_file' path='{path}'")
                                     asyncio.create_task(self.handle_write_file(path, content))
-                                    function_response = types.FunctionResponse(
+                                    function_response = FunctionResponseData(
                                         id=fc.id, name=fc.name, response={"result": "Writing file..."}
                                     )
                                     function_responses.append(function_response)
@@ -817,7 +802,7 @@ class AudioLoop:
                                     path = fc.args["path"]
                                     print(f"[ADA DEBUG] [TOOL] Tool Call: 'read_directory' path='{path}'")
                                     asyncio.create_task(self.handle_read_directory(path))
-                                    function_response = types.FunctionResponse(
+                                    function_response = FunctionResponseData(
                                         id=fc.id, name=fc.name, response={"result": "Reading directory..."}
                                     )
                                     function_responses.append(function_response)
@@ -826,7 +811,7 @@ class AudioLoop:
                                     path = fc.args["path"]
                                     print(f"[ADA DEBUG] [TOOL] Tool Call: 'read_file' path='{path}'")
                                     asyncio.create_task(self.handle_read_file(path))
-                                    function_response = types.FunctionResponse(
+                                    function_response = FunctionResponseData(
                                         id=fc.id, name=fc.name, response={"result": "Reading file..."}
                                     )
                                     function_responses.append(function_response)
@@ -841,7 +826,7 @@ class AudioLoop:
                                         msg += f" Switched to '{name}'."
                                         if self.on_project_update:
                                             self.on_project_update(name)
-                                    function_response = types.FunctionResponse(
+                                    function_response = FunctionResponseData(
                                         id=fc.id, name=fc.name, response={"result": msg}
                                     )
                                     function_responses.append(function_response)
@@ -860,7 +845,7 @@ class AudioLoop:
                                             await self.session.send(input=f"System Notification: {msg}\n\n{context}", end_of_turn=False)
                                         except Exception as e:
                                             print(f"[ADA DEBUG] [ERR] Failed to send project context: {e}")
-                                    function_response = types.FunctionResponse(
+                                    function_response = FunctionResponseData(
                                         id=fc.id, name=fc.name, response={"result": msg}
                                     )
                                     function_responses.append(function_response)
@@ -868,7 +853,7 @@ class AudioLoop:
                                 elif fc.name == "list_projects":
                                     print(f"[ADA DEBUG] [TOOL] Tool Call: 'list_projects'")
                                     projects = self.project_manager.list_projects()
-                                    function_response = types.FunctionResponse(
+                                    function_response = FunctionResponseData(
                                         id=fc.id, name=fc.name, response={"result": f"Available projects: {', '.join(projects)}"}
                                     )
                                     function_responses.append(function_response)
@@ -917,7 +902,7 @@ class AudioLoop:
                                     if self.on_device_update:
                                         self.on_device_update(frontend_list)
 
-                                    function_response = types.FunctionResponse(
+                                    function_response = FunctionResponseData(
                                         id=fc.id, name=fc.name, response={"result": result_str}
                                     )
                                     function_responses.append(function_response)
@@ -996,7 +981,7 @@ class AudioLoop:
                                         if self.on_error:
                                             self.on_error(result_msg)
 
-                                    function_response = types.FunctionResponse(
+                                    function_response = FunctionResponseData(
                                         id=fc.id, name=fc.name, response={"result": result_msg}
                                     )
                                     function_responses.append(function_response)
@@ -1013,7 +998,7 @@ class AudioLoop:
                                     else:
                                         result_str = "No printers found on network. Ensure printers are on and running OctoPrint/Moonraker."
                                     
-                                    function_response = types.FunctionResponse(
+                                    function_response = FunctionResponseData(
                                         id=fc.id, name=fc.name, response={"result": result_str}
                                     )
                                     function_responses.append(function_response)
@@ -1040,7 +1025,7 @@ class AudioLoop:
                                     )
                                     result_str = result.get("message", "Unknown result")
                                     
-                                    function_response = types.FunctionResponse(
+                                    function_response = FunctionResponseData(
                                         id=fc.id, name=fc.name, response={"result": result_str}
                                     )
                                     function_responses.append(function_response)
@@ -1069,7 +1054,7 @@ class AudioLoop:
                                     else:
                                         result_str = f"Could not get status for printer '{printer}'. Ensure it is discovered first."
                                     
-                                    function_response = types.FunctionResponse(
+                                    function_response = FunctionResponseData(
                                         id=fc.id, name=fc.name, response={"result": result_str}
                                     )
                                     function_responses.append(function_response)
@@ -1105,7 +1090,7 @@ class AudioLoop:
                                         print(f"[ADA DEBUG] [ERR] CadAgent iteration returned None.")
                                         result_str = f"Failed to iterate design with prompt: {prompt}"
                                     
-                                    function_response = types.FunctionResponse(
+                                    function_response = FunctionResponseData(
                                         id=fc.id, name=fc.name, response={"result": result_str}
                                     )
                                     function_responses.append(function_response)
@@ -1176,9 +1161,10 @@ class AudioLoop:
         
         while not self.stop_event.is_set():
             try:
-                print(f"[ADA DEBUG] [CONNECT] Connecting to Gemini Live API...")
+                print(f"[ADA DEBUG] [CONNECT] Connecting to AI Live API (provider: {os.getenv('AI_PROVIDER', 'gemini')})...")
+                session_ctx = await self.live_provider.connect(model=MODEL, config=live_config)
                 async with (
-                    client.aio.live.connect(model=MODEL, config=config) as session,
+                    session_ctx as session,
                     asyncio.TaskGroup() as tg,
                 ):
                     self.session = session

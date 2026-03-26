@@ -15,7 +15,7 @@ class TestWebAgentInit:
         """Test WebAgent can be created."""
         agent = WebAgent()
         assert agent is not None
-        assert hasattr(agent, 'client')
+        assert hasattr(agent, 'provider')
         print("WebAgent initialized successfully")
     
     def test_agent_has_browser_attrs(self):
