@@ -87,10 +87,10 @@ graph TB
 
 ```bash
 # 1. Clone and enter
-git clone https://github.com/daiam/ada_v2.git && cd ada_v2
+git clone https://github.com/SyedDaiam9101/A.D.A.git && cd A.D.A
 
 # 2. Create Python environment (Python 3.11)
-conda create -n ada_v2 python=3.11 -y && conda activate ada_v2
+conda create -n A.D.A python=3.11 -y && conda activate A.D.A
 brew install portaudio  # macOS only (for PyAudio)
 pip install -r requirements.txt
 playwright install chromium
@@ -105,7 +105,7 @@ GEMINI_API_KEY=your_key_here
 EOF
 
 # 5. Run!
-conda activate ada_v2 && npm run dev
+conda activate A.D.A && npm run dev
 ```
 
 </details>
@@ -135,12 +135,12 @@ If you have never coded before, follow these steps first!
    ```bash
    git clone https://github.com/SyedDaiam9101/A.D.A.git
    ```
-3. This creates a folder named `ada_v2`.
+3. This creates a folder named `A.D.A`.
 
 **Step 5: Open in VS Code**
 1. Open VS Code.
 2. Go to **File > Open Folder**.
-3. Select the `ada_v2` folder you just downloaded.
+3. Select the `A.D.A` folder you just downloaded.
 4. Open the internal terminal: Press `Ctrl + ~` (tilde) or go to **Terminal > New Terminal**.
 
 ---
@@ -189,7 +189,7 @@ To use the secure voice features, ADA needs to know what you look like.
 
 1. Take a clear photo of your face (or use an existing one).
 2. Rename the file to `reference.jpg`.
-3. Drag and drop this file into the `ada_v2/backend` folder.
+3. Drag and drop this file into the `A.D.A/backend` folder.
 4. (Optional) You can toggle this feature on/off in `settings.json` by changing `"face_auth_enabled": true/false`.
 
 ---
@@ -236,7 +236,7 @@ ADA reads provider configuration from `.env`.
 **Gemini (default)**
 1. Go to [Google AI Studio](https://aistudio.google.com/app/apikey).
 2. Create an API key.
-3. Create a file named `.env` in the `ada_v2` folder.
+3. Create a file named `.env` in the `A.D.A` folder.
 4. Add:
    ```
    AI_PROVIDER=gemini
@@ -278,12 +278,12 @@ LIVE_MODEL=gpt-4o-realtime-preview
 
 ## 🚀 Running ADA V2
 
-You have two options to run the app. Ensure your `ada_v2` environment is active!
+You have two options to run the app. Ensure your `A.D.A` environment is active!
 
 ### Option 1: The "Easy" Way (Single Terminal)
 The app is smart enough to start the backend for you.
-1. Open your terminal in the `ada_v2` folder.
-2. Activate your environment: `conda activate ada_v2`
+1. Open your terminal in the `A.D.A` folder.
+2. Activate your environment: `conda activate A.D.A`
 3. Run:
    ```bash
    npm run dev
@@ -295,7 +295,7 @@ Use this if you want to see the Python logs (recommended for debugging).
 
 **Terminal 1 (Backend):**
 ```bash
-conda activate ada_v2
+conda activate A.D.A
 python backend/server.py
 ```
 
@@ -358,7 +358,7 @@ npm run dev
 **Symptoms**: Backend crashes on startup with "API key not found".
 
 **Solution**:
-1. Make sure your `.env` file is in the root `ada_v2` folder (not inside `backend/`).
+1. Make sure your `.env` file is in the root `A.D.A` folder (not inside `backend/`).
 2. Verify the format is exactly: `GEMINI_API_KEY=your_key` (no quotes, no spaces).
 3. Restart the backend after editing the file.
 
@@ -381,7 +381,7 @@ This is a server-side issue from the Gemini API. Simply reconnect by clicking th
 ## 📂 Project Structure
 
 ```
-ada_v2/
+A.D.A/
 ├── backend/                    # Python server & AI logic
 │   ├── ada.py                  # Live audio/session orchestration
 │   ├── server.py               # FastAPI + Socket.IO server
